@@ -47,7 +47,14 @@ int main(int argc, char **argv) {
     
     auto store = openStore();
 
+    if (!isatty(STDIN_FILENO)) {
+      std::string word;
+      while (std::cin >> word) {
+        opArgs.paths.push_back(word);
+      }
+    }
     if (opArgs.paths.empty()) throw UsageError("no paths passed");
+
 
     ThreadPool pool(fileTransferSettings.httpConnections);
 
