@@ -1,0 +1,75 @@
+name: Standard CI
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    permissions:
+      contents: read
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci-off') }}
+    outputs:
+      hits: ${{ steps.discovery.outputs.hits }}
+      nix_conf: ${{ steps.discovery.outputs.nix_conf }}
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: Standard Discovery
+        uses: divnix/std-action/discover@v0.0.4
+        id: discovery
+
+
+  build_packages:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.target.cell }}.${{ matrix.target.block }}.${{ matrix.target.name }}
+      cancel-in-progress: false
+    if: always() && github.ref_name == 'master'
+    needs:
+      - discover
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.discover.outputs.hits).packages.build }}
+    name: ${{ matrix.target.action }}->${{ matrix.target.cell }}.${{ matrix.target.block }}.${{ matrix.target.name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: divnix/std-action/run@v0.0.4
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET }}
+        with:
+          nix_key: ${{ secrets.NIX_KEY }}
+          cache: s3://cache.divnix.com?endpoint=fra1.digitaloceanspaces.com
+          extra_nix_config: |
+            ${{ needs.discover.outputs.nix_conf }}
+          json: ${{ toJSON(matrix.target) }}
+
+  build_devshells:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.target.cell }}.${{ matrix.target.block }}.${{ matrix.target.name }}
+      cancel-in-progress: false
+    if: always() && github.ref_name == 'master'
+    needs:
+      - discover
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.discover.outputs.hits).devshells.build }}
+    name: ${{ matrix.target.action }}->${{ matrix.target.cell }}.${{ matrix.target.block }}.${{ matrix.target.name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: divnix/std-action/run@v0.0.4
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET }}
+        with:
+          nix_key: ${{ secrets.NIX_KEY }}
+          cache: s3://cache.divnix.com?endpoint=fra1.digitaloceanspaces.com
+          extra_nix_config: |
+            ${{ needs.discover.outputs.nix_conf }}
+          json: ${{ toJSON(matrix.target) }}

@@ -1,5 +1,5 @@
 {
-  description = "Hydra's builtin hydra-eval-jobs as a standalone";
+  description = "Query Nix Cache Status";
 
   inputs.nixpkgs.follows = "nix/nixpkgs";
   inputs.std.url = "github:divnix/std";
@@ -27,4 +27,13 @@
         ["automation" "devshells"]
       ];
     };
+  nixConfig = {
+    allow-import-from-derivation = false;
+    extra-substituters = [
+      "https://cache.divnix.com"
+    ];
+    extra-trusted-public-keys = [
+      "cache.divnix.com:sx7ojBrBUtdNmAMzNhiucTX+pqLzNTs4ISNb5qhh5OI="
+    ];
+  };
 }
