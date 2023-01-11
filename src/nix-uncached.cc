@@ -1,9 +1,9 @@
+#include <future>
 #include <nix/attr-path.hh>
 #include <nix/config.h>
+#include <nix/filetransfer.hh>
 #include <nix/shared.hh>
 #include <nix/store-api.hh>
-#include <nix/filetransfer.hh>
-#include <nix/thread-pool.hh>
 
 using namespace nix;
 
@@ -13,9 +13,8 @@ using namespace nix;
 #elif __clang__
 #pragma clang diagnostic ignored "-Wnon-virtual-dtor"
 #endif
-struct OpArgs : MixCommonArgs, MixJSON {
+struct OpArgs : MixCommonArgs {
   std::vector<std::string> paths;
-
   OpArgs() : MixCommonArgs("nix-uncached") {
     expectArgs({.label = "paths", .optional = false, .handler = {&paths}});
 
@@ -44,7 +43,7 @@ int main(int argc, char **argv) {
     initGC();
 
     opArgs.parseCmdline(argvToStrings(argc, argv));
-    
+
     auto store = openStore();
 
     if (!isatty(STDIN_FILENO)) {
@@ -53,27 +52,58 @@ int main(int argc, char **argv) {
         opArgs.paths.push_back(word);
       }
     }
-    if (opArgs.paths.empty()) throw UsageError("no paths passed");
+    if (opArgs.paths.empty())
+      throw UsageError("no paths passed");
 
-
-    ThreadPool pool(fileTransferSettings.httpConnections);
-
-    std::function<void(StorePath)> queryPath;
-    queryPath = [&](const StorePath & req) {
-        SubstitutablePathInfos infos;
-        store->querySubstitutablePathInfos({{req, std::nullopt}}, infos);
-
-        if (infos.empty()) {
-            std::cout << store->printStorePath(req) << '\n';
-        }
-    };
-
-    for (auto & str : opArgs.paths) {
-        auto path = store->followLinksToStorePath(str);
-
-        pool.enqueue(std::bind(queryPath, path));
+    StorePaths storePaths;
+    for (auto &str : opArgs.paths) {
+      storePaths.emplace_back(store->followLinksToStorePath(str));
     }
 
-    pool.process();
+    StringSet pathsS;
+    std::exception_ptr exc;
+    std::vector<std::future<ref<const ValidPathInfo>>> futures;
+
+    fileTransferSettings.tries = 1;
+    fileTransferSettings.enableHttp2 = true;
+
+    for (auto &sub : getDefaultSubstituters()) {
+      if (!settings.useSubstitutes)
+        break;
+
+      if (sub->storeDir != store->storeDir)
+        continue;
+      if (!sub->wantMassQuery)
+        continue;
+
+      for (auto &path : storePaths)
+        futures.push_back(std::async(
+            [=](StorePath path) { return sub->queryPathInfo(path); }, path));
+    }
+
+    for (auto &fut : futures) {
+      try {
+        auto info = fut.get();
+        pathsS.emplace(store->printStorePath(info->path));
+      } catch (InvalidPath &) {
+        continue;
+      } catch (...) {
+        exc = std::current_exception();
+      }
+    }
+
+    if (exc)
+      std::rethrow_exception(exc);
+
+    StorePathSet substitutablePaths;
+    for (auto &str : pathsS) {
+      substitutablePaths.emplace(store->followLinksToStorePath(str));
+    }
+
+    for (auto &path : storePaths) {
+      if (substitutablePaths.find(path) == substitutablePaths.end())
+        std::cout << store->printStorePath(path) << '\n';
+    }
+    std::cout << std::endl;
   });
 }
