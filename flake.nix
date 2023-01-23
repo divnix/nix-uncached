@@ -3,7 +3,7 @@
 
   inputs.nixpkgs.follows = "nix/nixpkgs";
   inputs.std.url = "github:divnix/std";
-  inputs.nix.url = "github:nixos/nix/2.12-maintenance";
+  inputs.nix.url = "github:nixos/nix/2.13-maintenance";
 
   outputs = {
     self,

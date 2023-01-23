@@ -14,7 +14,7 @@ stdenv.mkDerivation {
   inherit src;
 
   pname = "nix-uncached";
-  version = "2.12.1";
+  version = "2.13.1";
   buildInputs = [
     nlohmann_json
     nix
