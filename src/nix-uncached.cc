@@ -1,9 +1,13 @@
+#include <algorithm>
 #include <future>
 #include <nix/attr-path.hh>
 #include <nix/config.h>
+#include <nix/derivations.hh>
 #include <nix/filetransfer.hh>
+#include <nix/parsed-derivations.hh>
 #include <nix/shared.hh>
 #include <nix/store-api.hh>
+#include <nlohmann/json.hpp>
 
 using namespace nix;
 
@@ -60,9 +64,12 @@ int main(int argc, char **argv) {
       storePaths.emplace_back(store->followLinksToStorePath(str));
     }
 
-    StringSet pathsS;
+    using InputPath = std::string;
     std::exception_ptr exc;
-    std::vector<std::future<ref<const ValidPathInfo>>> futures;
+    std::map<InputPath, StringSet> queryPaths;
+    std::map<InputPath, StringSet> substitutablePaths;
+    std::map<InputPath, std::vector<std::future<ref<const ValidPathInfo>>>>
+        futures;
 
     fileTransferSettings.tries = 1;
     fileTransferSettings.enableHttp2 = true;
@@ -76,34 +83,80 @@ int main(int argc, char **argv) {
       if (!sub->wantMassQuery)
         continue;
 
-      for (auto &path : storePaths)
-        futures.push_back(std::async(
-            [=](StorePath path) { return sub->queryPathInfo(path); }, path));
+      for (auto &storePath : storePaths) {
+        StorePathSet outputs;
+        if (storePath.isDerivation()) {
+          auto drv = store->derivationFromPath(storePath);
+          for (auto &i : drv.outputsAndOptPaths(*store)) {
+            if (!i.second.second)
+              throw UsageError(
+                  "Cannot use output path of floating content-addressed "
+                  "derivation until we know what it is (e.g. by building it)");
+            outputs.insert(*i.second.second);
+          }
+        } else
+          outputs.insert(storePath);
+
+        for (auto output : outputs) {
+          StorePathSet paths;
+          store->computeFSClosure(output, paths, false, true);
+
+          // for sanity, only query remotely buildable paths that have a known
+          // deriver
+          for (auto &p : paths) {
+            auto deriver = store->queryPathInfo(p)->deriver;
+            if (deriver.has_value()) {
+              if (store->isValidPath(deriver.value())) {
+                auto drv = store->derivationFromPath(deriver.value());
+                auto parsedDrv = ParsedDerivation(deriver.value(), drv);
+                if (!parsedDrv.getBoolAttr("preferLocalBuild"))
+                  queryPaths[store->printStorePath(storePath)].insert(
+                      store->printStorePath(p));
+              }
+            }
+          }
+        }
+      }
+
+      for (auto &map : queryPaths) {
+        for (auto &path : map.second)
+          futures[map.first].push_back(std::async(
+              [=](std::string path) {
+                return sub->queryPathInfo(sub->parseStorePath(path));
+              },
+              path));
+      }
     }
 
-    for (auto &fut : futures) {
-      try {
-        auto info = fut.get();
-        pathsS.emplace(store->printStorePath(info->path));
-      } catch (InvalidPath &) {
-        continue;
-      } catch (...) {
-        exc = std::current_exception();
+    for (auto &map : futures) {
+      for (auto &fut : map.second) {
+        try {
+          auto info = fut.get();
+          substitutablePaths[map.first].emplace(
+              store->printStorePath(info->path));
+        } catch (InvalidPath &) {
+          continue;
+        } catch (...) {
+          exc = std::current_exception();
+        }
       }
     }
 
     if (exc)
       std::rethrow_exception(exc);
 
-    StorePathSet substitutablePaths;
-    for (auto &str : pathsS) {
-      substitutablePaths.emplace(store->followLinksToStorePath(str));
+    std::map<InputPath, StringSet> uncachedPaths;
+
+    for (auto &map : queryPaths) {
+      if (substitutablePaths.count(map.first))
+        std::set_difference(map.second.begin(), map.second.end(),
+                            substitutablePaths[map.first].begin(),
+                            substitutablePaths[map.first].end(),
+                            std::inserter(uncachedPaths[map.first],
+                                          uncachedPaths[map.first].begin()));
     }
 
-    for (auto &path : storePaths) {
-      if (substitutablePaths.find(path) == substitutablePaths.end())
-        std::cout << store->printStorePath(path) << '\n';
-    }
-    std::cout << std::endl;
+    nlohmann::json out(uncachedPaths);
+    std::cout << out.dump();
   });
 }
