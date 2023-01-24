@@ -74,6 +74,26 @@ int main(int argc, char **argv) {
     fileTransferSettings.tries = 1;
     fileTransferSettings.enableHttp2 = true;
 
+    for (auto &storePath : storePaths) {
+      StorePathSet paths;
+      store->computeFSClosure(storePath, paths, false, true);
+
+      // for sanity, only query remotely buildable paths that have a known
+      // deriver
+      for (auto &p : paths) {
+        auto deriver = store->queryPathInfo(p)->deriver;
+        if (deriver.has_value()) {
+          if (store->isValidPath(deriver.value())) {
+            auto drv = store->derivationFromPath(deriver.value());
+            auto parsedDrv = ParsedDerivation(deriver.value(), drv);
+            if (!parsedDrv.getBoolAttr("preferLocalBuild"))
+              queryPaths[store->printStorePath(storePath)].insert(
+                  store->printStorePath(p));
+          }
+        }
+      }
+    }
+
     for (auto &sub : getDefaultSubstituters()) {
       if (!settings.useSubstitutes)
         break;
@@ -82,26 +102,6 @@ int main(int argc, char **argv) {
         continue;
       if (!sub->wantMassQuery)
         continue;
-
-      for (auto &storePath : storePaths) {
-        StorePathSet paths;
-        store->computeFSClosure(storePath, paths, false, true);
-
-        // for sanity, only query remotely buildable paths that have a known
-        // deriver
-        for (auto &p : paths) {
-          auto deriver = store->queryPathInfo(p)->deriver;
-          if (deriver.has_value()) {
-            if (store->isValidPath(deriver.value())) {
-              auto drv = store->derivationFromPath(deriver.value());
-              auto parsedDrv = ParsedDerivation(deriver.value(), drv);
-              if (!parsedDrv.getBoolAttr("preferLocalBuild"))
-                queryPaths[store->printStorePath(storePath)].insert(
-                    store->printStorePath(p));
-            }
-          }
-        }
-      }
 
       for (auto &map : queryPaths) {
         for (auto &path : map.second)
