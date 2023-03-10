@@ -122,13 +122,14 @@ int main(int argc, char **argv) {
         } catch (InvalidPath &) {
           continue;
         } catch (...) {
-          exc = std::current_exception();
+          continue;
+          // exc = std::current_exception();
         }
       }
     }
 
-    if (exc)
-      std::rethrow_exception(exc);
+    // if (exc)
+    //   std::rethrow_exception(exc);
 
     std::map<InputPath, StringSet> uncachedPaths;
 
