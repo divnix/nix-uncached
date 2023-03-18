@@ -69,9 +69,6 @@ int main(int argc, char **argv) {
     std::map<InputPath, StringSet> queryPaths;
     std::map<InputPath, StringSet> substitutablePaths;
 
-    fileTransferSettings.tries = 1;
-    fileTransferSettings.enableHttp2 = true;
-
     for (auto &storePath : storePaths) {
       StorePathSet paths;
       store->computeFSClosure(storePath, paths, false, true);
