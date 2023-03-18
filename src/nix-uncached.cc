@@ -68,11 +68,6 @@ int main(int argc, char **argv) {
     std::exception_ptr exc;
     std::map<InputPath, StringSet> queryPaths;
     std::map<InputPath, StringSet> substitutablePaths;
-    std::map<InputPath, std::vector<std::future<ref<const ValidPathInfo>>>>
-        futures;
-
-    fileTransferSettings.tries = 1;
-    fileTransferSettings.enableHttp2 = true;
 
     for (auto &storePath : storePaths) {
       StorePathSet paths;
@@ -95,42 +90,55 @@ int main(int argc, char **argv) {
     }
 
     for (auto &sub : getDefaultSubstituters()) {
+      debug("considering '%s' for mass query", sub->getUri());
+
       if (!settings.useSubstitutes)
         break;
 
-      if (sub->storeDir != store->storeDir)
+      if (sub->storeDir != store->storeDir) {
+        debug("discarding '%s' for mass query since '%s' != '%s'", sub->getUri(), sub->storeDir, store->storeDir);
         continue;
-      if (!sub->wantMassQuery)
+      }
+
+      if (!sub->wantMassQuery) {
+        debug("discarding '%s' for mass query since doesn not want mass query", sub->getUri());
         continue;
+      }
+
+      debug("arming '%s' for mass query", sub->getUri());
+
+      std::map<InputPath, std::vector<std::future<ref<const ValidPathInfo>>>>
+          futures;
 
       for (auto &map : queryPaths) {
-        for (auto &path : map.second)
-          futures[map.first].push_back(std::async(
-              [=](std::string path) {
-                return sub->queryPathInfo(sub->parseStorePath(path));
-              },
-              path));
+        for (auto &path : map.second) {
+          if(substitutablePaths[map.first].find(path) == substitutablePaths[map.first].end())
+            futures[map.first].push_back(std::async(
+                [=](std::string path) {
+                  return sub->queryPathInfo(sub->parseStorePath(path));
+                },
+                path));
+        }
       }
-    }
 
-    for (auto &map : futures) {
-      for (auto &fut : map.second) {
-        try {
-          auto info = fut.get();
-          substitutablePaths[map.first].emplace(
-              store->printStorePath(info->path));
-        } catch (InvalidPath &) {
-          continue;
-        } catch (...) {
-          exc = std::current_exception();
+      for (auto &map : futures) {
+        for (auto &fut : map.second) {
+          try {
+            auto info = fut.get();
+            substitutablePaths[map.first].emplace(store->printStorePath(info->path));
+            debug("found '%s'", store->printStorePath(info->path));
+          } catch (InvalidPath & e) {
+            continue;
+          } catch(const std::exception& e) {
+            debug("Unknown expection: '%s'", e.what());
+            continue;
+          }
         }
       }
     }
 
-    if (exc)
-      std::rethrow_exception(exc);
-
     std::map<InputPath, StringSet> uncachedPaths;
+
 
     for (auto &map : queryPaths) {
       if (substitutablePaths.count(map.first))
