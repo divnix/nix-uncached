@@ -68,8 +68,6 @@ int main(int argc, char **argv) {
     std::exception_ptr exc;
     std::map<InputPath, StringSet> queryPaths;
     std::map<InputPath, StringSet> substitutablePaths;
-    std::map<InputPath, std::vector<std::future<ref<const ValidPathInfo>>>>
-        futures;
 
     fileTransferSettings.tries = 1;
     fileTransferSettings.enableHttp2 = true;
@@ -112,32 +110,38 @@ int main(int argc, char **argv) {
 
       debug("arming '%s' for mass query", sub->getUri());
 
-      for (auto &map : queryPaths) {
-        for (auto &path : map.second)
-          futures[map.first].push_back(std::async(
-              [=](std::string path) {
-                return sub->queryPathInfo(sub->parseStorePath(path));
-              },
-              path));
-      }
-    }
+      std::map<InputPath, std::vector<std::future<ref<const ValidPathInfo>>>>
+          futures;
 
-    for (auto &map : futures) {
-      for (auto &fut : map.second) {
-        try {
-          auto info = fut.get();
-          substitutablePaths[map.first].emplace(store->printStorePath(info->path));
-          debug("found '%s'", store->printStorePath(info->path));
-        } catch (InvalidPath & e) {
-          continue;
-        } catch(const std::exception& e) {
-          debug("Unknown expection: '%s'", e.what());
-          continue;
+      for (auto &map : queryPaths) {
+        for (auto &path : map.second) {
+          if(substitutablePaths[map.first].find(path) == substitutablePaths[map.first].end())
+            futures[map.first].push_back(std::async(
+                [=](std::string path) {
+                  return sub->queryPathInfo(sub->parseStorePath(path));
+                },
+                path));
+        }
+      }
+
+      for (auto &map : futures) {
+        for (auto &fut : map.second) {
+          try {
+            auto info = fut.get();
+            substitutablePaths[map.first].emplace(store->printStorePath(info->path));
+            debug("found '%s'", store->printStorePath(info->path));
+          } catch (InvalidPath & e) {
+            continue;
+          } catch(const std::exception& e) {
+            debug("Unknown expection: '%s'", e.what());
+            continue;
+          }
         }
       }
     }
 
     std::map<InputPath, StringSet> uncachedPaths;
+
 
     for (auto &map : queryPaths) {
       if (substitutablePaths.count(map.first))
