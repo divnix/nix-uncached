@@ -95,13 +95,22 @@ int main(int argc, char **argv) {
     }
 
     for (auto &sub : getDefaultSubstituters()) {
+      debug("considering '%s' for mass query", sub->getUri());
+
       if (!settings.useSubstitutes)
         break;
 
-      if (sub->storeDir != store->storeDir)
+      if (sub->storeDir != store->storeDir) {
+        debug("discarding '%s' for mass query since '%s' != '%s'", sub->getUri(), sub->storeDir, store->storeDir);
         continue;
-      if (!sub->wantMassQuery)
+      }
+
+      if (!sub->wantMassQuery) {
+        debug("discarding '%s' for mass query since doesn not want mass query", sub->getUri());
         continue;
+      }
+
+      debug("arming '%s' for mass query", sub->getUri());
 
       for (auto &map : queryPaths) {
         for (auto &path : map.second)
@@ -117,18 +126,16 @@ int main(int argc, char **argv) {
       for (auto &fut : map.second) {
         try {
           auto info = fut.get();
-          substitutablePaths[map.first].emplace(
-              store->printStorePath(info->path));
-        } catch (InvalidPath &) {
+          substitutablePaths[map.first].emplace(store->printStorePath(info->path));
+          debug("found '%s'", store->printStorePath(info->path));
+        } catch (InvalidPath & e) {
           continue;
-        } catch (...) {
-          exc = std::current_exception();
+        } catch(const std::exception& e) {
+          debug("Unknown expection: '%s'", e.what());
+          continue;
         }
       }
     }
-
-    if (exc)
-      std::rethrow_exception(exc);
 
     std::map<InputPath, StringSet> uncachedPaths;
 
